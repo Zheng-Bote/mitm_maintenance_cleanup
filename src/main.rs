@@ -68,7 +68,7 @@ impl IpcClient {
         let event = StatusEvent {
             run_id: self.run_id,
             r#type: "status",
-            component: None,
+            component: Some(self.component.as_str()),
             status: Some(status),
             message: message.to_string(),
             progress: Some(progress),
@@ -223,10 +223,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config_source = "Environment Variables";
     
     let mitm_dsn = if !json_config.is_empty() {
-        let full_cfg: FullDbConfig = serde_json::from_str(&json_config).unwrap_or_else(|e| {
-            eprintln!("Failed to parse MitM JSON configuration: {}", e);
-            std::process::exit(1);
-        });
+        let full_cfg: FullDbConfig = match serde_json::from_str(&json_config) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Failed to parse MitM JSON configuration: {}", e);
+                if let Some(ipc) = &ipc_client { ipc.send_event("failed", &format!("Parse error: {}", e), 0).await; }
+                std::process::exit(1);
+            }
+        };
         config_source = "JSON Config (MITM_DB_CONFIG_JSON)";
         let ssl = if full_cfg.db.sslmode { "require" } else { "disable" };
         unsafe { env::set_var("MITM_DB_SSLMODE", ssl); }
@@ -258,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("postgres://{}:{}@{}:{}/{}?sslmode={}", user, pass, host, port, db, ssl_val)
     };
 
+
     if let Some(ipc) = &ipc_client {
         ipc.send_audit(&format!("Loaded database configuration from {}", config_source)).await;
     }
@@ -271,26 +276,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let pool = PgPoolOptions::new()
+    let pool = match PgPoolOptions::new()
         .max_connections(3)
         .idle_timeout(Duration::from_secs(5 * 60))
         .max_lifetime(Duration::from_secs(60 * 60))
         .connect(&mitm_dsn)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to connect: {}", e);
-            std::process::exit(1);
-        });
+        .await {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Failed to connect: {}", e);
+                if let Some(ipc) = &ipc_client { ipc.send_event("failed", &format!("DB connect error: {}", e), 0).await; }
+                std::process::exit(1);
+            }
+        };
 
     if let Some(ipc) = &ipc_client {
         ipc.send_event("processing", "Connected to MitM database. Starting cleanup...", 10).await;
     }
 
+
     let mut total_deleted = 0;
     let mut errors_occurred = false;
 
     // 1. Clean Target Fragments
-    match delete_in_batches(&pool, "target_fragments", "delivery_status = 'delivered' AND created_at < NOW() - INTERVAL '1 day' * $1", args.target_fragments_retention_days).await {
+    match delete_in_batches(&pool, "target_fragments", "LOWER(delivery_status) = 'delivered' AND created_at < NOW() - INTERVAL '1 day' * $1", args.target_fragments_retention_days).await {
         Ok(count) => {
             total_deleted += count;
             if let Some(ipc) = &ipc_client {
@@ -298,7 +307,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Err(e) => {
-            eprintln!("Error cleaning target_fragments: {}", e);
+            eprintln!("Error cleaning target_fragments: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning target_fragments: {}", e)).await;
             errors_occurred = true;
         }
     }
@@ -308,7 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 2. Clean Orphaned Raw Ingestion
-    match delete_in_batches(&pool, "raw_ingestion", "status IN ('pending', 'delivered') AND created_at < NOW() - INTERVAL '1 day' * $1", args.raw_ingestion_orphan_days).await {
+    match delete_in_batches(&pool, "raw_ingestion", "status IN ('pending', 'processed', 'failed_validation') AND created_at < NOW() - INTERVAL '1 day' * $1", args.raw_ingestion_orphan_days).await {
         Ok(count) => {
             total_deleted += count;
             if let Some(ipc) = &ipc_client {
@@ -316,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Err(e) => {
-            eprintln!("Error cleaning raw_ingestion: {}", e);
+            eprintln!("Error cleaning raw_ingestion: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning raw_ingestion: {}", e)).await;
             errors_occurred = true;
         }
     }
@@ -334,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Err(e) => {
-            eprintln!("Error cleaning job_audit_logs: {}", e);
+            eprintln!("Error cleaning job_audit_logs: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning job_audit_logs: {}", e)).await;
             errors_occurred = true;
         }
     }
@@ -346,7 +355,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Err(e) => {
-            eprintln!("Error cleaning admin_audit_logs: {}", e);
+            eprintln!("Error cleaning admin_audit_logs: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning admin_audit_logs: {}", e)).await;
             errors_occurred = true;
         }
     }
@@ -364,7 +373,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Err(e) => {
-            eprintln!("Error cleaning system_logs: {}", e);
+            eprintln!("Error cleaning system_logs: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning system_logs: {}", e)).await;
             errors_occurred = true;
         }
     }
@@ -378,7 +387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Err(e) => {
-            eprintln!("Error cleaning job_status_events: {}", e);
+            eprintln!("Error cleaning job_status_events: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning job_status_events: {}", e)).await;
             errors_occurred = true;
         }
     }
@@ -392,7 +401,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Err(e) => {
-            eprintln!("Error cleaning transformation_errors: {}", e);
+            eprintln!("Error cleaning transformation_errors: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning transformation_errors: {}", e)).await;
             errors_occurred = true;
         }
     }
@@ -410,4 +419,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+async fn log_system(pool: &Pool<Postgres>, level: &str, message: &str) {
+    let _ = sqlx::query("INSERT INTO system_logs (level, component, message) VALUES ($1, 'mitm_cleanup', $2)")
+        .bind(level)
+        .bind(message)
+        .execute(pool)
+        .await;
 }
