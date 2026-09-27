@@ -1,0 +1,23 @@
+Spec: MitM Maintenance Cleanup Job
+Purpose: Generic, scheduled batch job to purge outdated transactional data and files based on configurable retention policies.
+
+Platform: Rust / Linux
+
+Structure:
+  ./src/
+
+Owns:
+  ./**
+
+Must:
+  Run independently as a scheduled binary without maintaining resident state.
+  Accept JSON parameters containing retention periods for database tables and filesystem paths.
+  Perform deletion in configurable batch sizes to avoid table locks or transaction log overflows.
+  Execute VACUUM ANALYZE on PostgreSQL tables after heavy deletions to reclaim space.
+  Strictly separate logging concerns (Start/Stop to system_logs, processing metrics to job_audit_logs).
+
+Tasks:
+  [ ] #7.1 Expand JSON configuration structs to parse `program_runs_retention_days`, `packages_retention_days`, `dlq_resolved_retention_days`, and a new array for `fs_cleanup_rules`.
+  [ ] #7.2 Add batched deletion logic for `program_runs`, `packages` (only status 'delivered'), and `dead_letter_queue` (only resolved=true).
+  [ ] #7.3 Implement generic filesystem cleanup function iterating over `fs_cleanup_rules` to delete outdated files matching the glob pattern.
+  [ ] #7.4 Update logging and IPC events to summarize the newly added cleanup targets correctly.
