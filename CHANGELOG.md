@@ -5,6 +5,13 @@ All notable changes to the `mitm_cleanup` component will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.0] - 2026-09-27
+
+### Added
+- **Database Cleanup:** Extended cleanup to include `program_runs`, `packages` (delivered), and `dead_letter_queue` (resolved) to prevent indefinite growth of these tables (Issue #7).
+- **Filesystem Cleanup:** Introduced generic time-based file deletion mechanism. Accepts `fs_cleanup_rules` in the JSON parameters to prune directories (e.g. for medical chunks).
+- **Logging Separation:** System logs explicitly restricted to Start/Stop/Cancel events and system errors, moving detailed job deletion metrics solely to the IPC job_audit_logs.
+
 ## [v0.10.0] - 2026-09-16
 
 ### Changed

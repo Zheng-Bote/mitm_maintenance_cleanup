@@ -51,10 +51,21 @@ The job accepts a JSON string as its first argument (`os.Args[1]`) to configure 
   "system_logs_retention_days": 30,
   "job_status_events_retention_days": 14,
   "transformation_errors_retention_days": 30,
+  "program_runs_retention_days": 30,
+  "packages_retention_days": 30,
+  "dlq_resolved_retention_days": 90,
+  "fs_cleanup_rules": [
+    {
+      "directory_path": "/path/to/dir",
+      "file_pattern": "*.dcm",
+      "retention_days": 30
+    }
+  ],
   "timeout_minutes": 60
 }
 ```
 
+- **`fs_cleanup_rules`**: A list of filesystem directories and glob patterns to clean up files older than their respective `retention_days`.
 - **`timeout_minutes`**: Configures the context execution timeout for the cleanup job (default is 60 minutes). This is useful to prevent long-running batched cleanups from being killed prematurely.
 
 ## Build
