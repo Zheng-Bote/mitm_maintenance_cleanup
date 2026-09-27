@@ -17,7 +17,7 @@ Must:
   Strictly separate logging concerns (Start/Stop to system_logs, processing metrics to job_audit_logs).
 
 Tasks:
-  [ ] #7.1 Expand JSON configuration structs to parse `program_runs_retention_days`, `packages_retention_days`, `dlq_resolved_retention_days`, and a new array for `fs_cleanup_rules`.
-  [ ] #7.2 Add batched deletion logic for `program_runs`, `packages` (only status 'delivered'), and `dead_letter_queue` (only resolved=true).
-  [ ] #7.3 Implement generic filesystem cleanup function iterating over `fs_cleanup_rules` to delete outdated files matching the glob pattern.
-  [ ] #7.4 Update logging and IPC events to summarize the newly added cleanup targets correctly.
+  [x] #7.1 Expand JSON configuration structs to parse `program_runs_retention_days`, `packages_retention_days`, `dlq_resolved_retention_days`, and a new array for `fs_cleanup_rules`.
+  [x] #7.2 Add batched deletion logic for `program_runs`, `packages` (only status 'delivered'), and `dead_letter_queue` (only resolved=true).
+  [x] #7.3 Implement generic filesystem cleanup function iterating over `fs_cleanup_rules` to delete outdated files matching the glob pattern.
+  [x] #7.4 Update logging and IPC events to summarize the newly added cleanup targets correctly.
