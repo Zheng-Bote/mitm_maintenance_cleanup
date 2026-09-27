@@ -11,6 +11,13 @@ use tokio::time::timeout;
 const APP_NAME: &str = "MitM Cleanup Job";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct FsCleanupRule {
+    directory_path: String,
+    file_pattern: String,
+    retention_days: i32,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct CleanupArgs {
     #[serde(default = "default_target_fragments")]
@@ -27,6 +34,14 @@ struct CleanupArgs {
     job_status_events_retention_days: i32,
     #[serde(default = "default_transformation_errors")]
     transformation_errors_retention_days: i32,
+    #[serde(default = "default_program_runs")]
+    program_runs_retention_days: i32,
+    #[serde(default = "default_packages")]
+    packages_retention_days: i32,
+    #[serde(default = "default_dlq_resolved")]
+    dlq_resolved_retention_days: i32,
+    #[serde(default = "default_fs_rules")]
+    fs_cleanup_rules: Vec<FsCleanupRule>,
     #[serde(default = "default_timeout")]
     timeout_minutes: i32,
 }
@@ -38,6 +53,10 @@ fn default_job_audit() -> i32 { 30 }
 fn default_system_logs() -> i32 { 30 }
 fn default_job_status() -> i32 { 14 }
 fn default_transformation_errors() -> i32 { 30 }
+fn default_program_runs() -> i32 { 30 }
+fn default_packages() -> i32 { 30 }
+fn default_dlq_resolved() -> i32 { 90 }
+fn default_fs_rules() -> Vec<FsCleanupRule> { vec![] }
 fn default_timeout() -> i32 { 60 }
 
 #[derive(Serialize)]
@@ -407,21 +426,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // 7. Clean Program Runs
+    match delete_in_batches(&pool, "program_runs", "started_at < NOW() - INTERVAL '1 day' * $1", args.program_runs_retention_days).await {
+        Ok(count) => {
+            total_deleted += count;
+            if let Some(ipc) = &ipc_client {
+                ipc.send_audit(&format!("Deleted {} program runs older than {} days.", count, args.program_runs_retention_days)).await;
+            }
+        },
+        Err(e) => {
+            eprintln!("Error cleaning program_runs: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning program_runs: {}", e)).await;
+            errors_occurred = true;
+        }
+    }
+
+    // 8. Clean Packages
+    match delete_in_batches(&pool, "packages", "LOWER(status) = 'delivered' AND created_at < NOW() - INTERVAL '1 day' * $1", args.packages_retention_days).await {
+        Ok(count) => {
+            total_deleted += count;
+            if let Some(ipc) = &ipc_client {
+                ipc.send_audit(&format!("Deleted {} delivered packages older than {} days.", count, args.packages_retention_days)).await;
+            }
+        },
+        Err(e) => {
+            eprintln!("Error cleaning packages: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning packages: {}", e)).await;
+            errors_occurred = true;
+        }
+    }
+
+    // 9. Clean Dead Letter Queue
+    match delete_in_batches(&pool, "dead_letter_queue", "resolved = TRUE AND failed_at < NOW() - INTERVAL '1 day' * $1", args.dlq_resolved_retention_days).await {
+        Ok(count) => {
+            total_deleted += count;
+            if let Some(ipc) = &ipc_client {
+                ipc.send_audit(&format!("Deleted {} resolved DLQ records older than {} days.", count, args.dlq_resolved_retention_days)).await;
+            }
+        },
+        Err(e) => {
+            eprintln!("Error cleaning dead_letter_queue: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning dead_letter_queue: {}", e)).await;
+            errors_occurred = true;
+        }
+    }
+
+    // 10. Clean Filesystem
+    let mut fs_deleted = 0;
+    if !args.fs_cleanup_rules.is_empty() {
+        match clean_filesystem(&args.fs_cleanup_rules) {
+            Ok(count) => {
+                fs_deleted = count;
+                if let Some(ipc) = &ipc_client {
+                    ipc.send_audit(&format!("Deleted {} outdated files from filesystem.", count)).await;
+                }
+            },
+            Err(e) => {
+                eprintln!("Error cleaning filesystem: {}", e);
+                log_system(&pool, "ERROR", &format!("Error cleaning filesystem: {}", e)).await;
+                errors_occurred = true;
+            }
+        }
+    }
+
     if let Some(ipc) = &ipc_client {
         ipc.send_audit(&format!("{} ({}) finished", APP_NAME, version)).await;
         
         if errors_occurred {
-            ipc.send_event("failed", &format!("Cleanup partially failed. Removed {} outdated records, but some errors occurred.", total_deleted), 100).await;
-            println!("Cleanup complete with errors. Deleted {} rows.", total_deleted);
+            let msg = format!("Cleanup partially failed. Removed {} DB records and {} files, but some errors occurred.", total_deleted, fs_deleted);
+            ipc.send_event("failed", &msg, 100).await;
+            println!("{}", msg);
         } else {
-            ipc.send_event("finished", &format!("Cleanup complete. Removed {} outdated records in total.", total_deleted), 100).await;
-            println!("Cleanup complete. Deleted {} rows.", total_deleted);
+            let msg = format!("Cleanup complete. Removed {} DB records and {} files.", total_deleted, fs_deleted);
+            ipc.send_event("finished", &msg, 100).await;
+            println!("{}", msg);
         }
     } else {
         if errors_occurred {
-            println!("Cleanup complete with errors. Deleted {} rows.", total_deleted);
+            println!("Cleanup partially failed. Removed {} DB records and {} files, but some errors occurred.", total_deleted, fs_deleted);
         } else {
-            println!("Cleanup complete. Deleted {} rows.", total_deleted);
+            println!("Cleanup complete. Removed {} DB records and {} files.", total_deleted, fs_deleted);
         }
     }
     
@@ -435,4 +516,35 @@ async fn log_system(pool: &Pool<Postgres>, level: &str, message: &str) {
         .bind(message)
         .execute(pool)
         .await;
+}
+
+fn clean_filesystem(rules: &[FsCleanupRule]) -> Result<i32, Box<dyn std::error::Error>> {
+    let mut total_deleted = 0;
+    let now = std::time::SystemTime::now();
+
+    for rule in rules {
+        let pattern = format!("{}/{}", rule.directory_path.trim_end_matches('/'), rule.file_pattern);
+        
+        for entry in glob::glob(&pattern)? {
+            if let Ok(path) = entry {
+                if path.is_file() {
+                    if let Ok(metadata) = std::fs::metadata(&path) {
+                        if let Ok(modified) = metadata.modified() {
+                            if let Ok(age) = now.duration_since(modified) {
+                                if age.as_secs() > (rule.retention_days as u64 * 24 * 60 * 60) {
+                                    if let Err(e) = std::fs::remove_file(&path) {
+                                        eprintln!("Failed to delete {}: {}", path.display(), e);
+                                    } else {
+                                        total_deleted += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(total_deleted)
 }
