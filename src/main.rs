@@ -293,6 +293,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ipc) = &ipc_client {
         ipc.send_event("processing", "Connected to MitM database. Starting cleanup...", 10).await;
     }
+    log_system(&pool, "INFO", &format!("{} ({}) started", APP_NAME, version)).await;
 
 
     let mut total_deleted = 0;
@@ -416,7 +417,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ipc.send_event("finished", &format!("Cleanup complete. Removed {} outdated records in total.", total_deleted), 100).await;
             println!("Cleanup complete. Deleted {} rows.", total_deleted);
         }
+    } else {
+        if errors_occurred {
+            println!("Cleanup complete with errors. Deleted {} rows.", total_deleted);
+        } else {
+            println!("Cleanup complete. Deleted {} rows.", total_deleted);
+        }
     }
+    
+    log_system(&pool, "INFO", &format!("{} ({}) finished", APP_NAME, version)).await;
 
     Ok(())
 }
