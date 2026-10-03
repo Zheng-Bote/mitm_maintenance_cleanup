@@ -468,7 +468,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 10. Clean Filesystem
+    // 10. Clean Expired User Sessions
+    match delete_in_batches(&pool, "user_sessions", "(expires_at < NOW() OR last_active_at < NOW() - INTERVAL '2 hours') AND $1=$1", 1).await {
+        Ok(count) => {
+            total_deleted += count;
+            if let Some(ipc) = &ipc_client {
+                ipc.send_audit(&format!("Deleted {} expired user sessions.", count)).await;
+            }
+        },
+        Err(e) => {
+            eprintln!("Error cleaning user_sessions: {}", e); log_system(&pool, "ERROR", &format!("Error cleaning user_sessions: {}", e)).await;
+            errors_occurred = true;
+        }
+    }
+
+    // 11. Clean Filesystem
     let mut fs_deleted = 0;
     if !args.fs_cleanup_rules.is_empty() {
         match clean_filesystem(&args.fs_cleanup_rules) {

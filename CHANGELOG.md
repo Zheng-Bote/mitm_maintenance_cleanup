@@ -5,6 +5,11 @@ All notable changes to the `mitm_cleanup` component will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.0] - 2026-10-03
+
+### Added
+- **Database Cleanup:** Extended cleanup to include `user_sessions`. Enforces removal of stale API v1 login tokens (absolute 24h TTL, 2h idle TTL) to prevent the table from growing indefinitely.
+
 ## [v1.1.0] - 2026-09-27
 
 ### Added

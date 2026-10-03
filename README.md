@@ -4,7 +4,7 @@ A Rust-based autonomous worker designed to maintain database health by pruning o
 
 ## Features
 
-- **Automated Pruning**: Deletes delivered Golden Records, orphaned raw ingestion fragments, and old audit/system logs.
+- **Automated Pruning**: Deletes delivered Golden Records, orphaned raw ingestion fragments, expired user sessions (24h absolute / 2h idle TTL), and old audit/system logs.
 - **Configurable Retention**: Uses a JSON payload to dynamically override retention periods for different tables.
 - **IPC Telemetry**: Reports progress, status, and audit logs directly to the central `mitm_scheduler` via Unix Domain Sockets.
 
