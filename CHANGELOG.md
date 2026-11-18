@@ -5,6 +5,11 @@ All notable changes to the `mitm_cleanup` component will be documented in this f
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.2.1] - 2026-11-18
+
+### Fixed
+- **Build with Rust 1.100 ([#10](https://github.com/Zheng-Bote/mitm_maintenance_cleanup/issues/10)):** `sqlx` upgraded from 0.7 to 0.8 (0.8.6). `sqlx-postgres` 0.7 relied on the never-type fallback that Rust 1.100 rejects (`the trait bound '!: sqlx_core::io::Decode' is not satisfied`). No source or behaviour change.
+
 ## [v1.2.0] - 2026-10-03
 
 ### Added
